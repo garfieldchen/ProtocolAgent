@@ -9,27 +9,18 @@ import ProtocolAgent
 
 
 class JsonAgent(ProtocolAgent.Agent):	
-    #
-    def send_msg(self, sock, msg_id, body):
-        data = self.encode(msg_id, body)
-        self.forward(sock, msg_id, data)
-
-    # forward message
-    def forward(self, sock, msg_id, data):
-        b = struct.pack(">HHs", len(data) + 2, msg_id, data)
-        sock.send(b)
-        sock.flush()
-
     # message codec
-    def decode(self, msg_id, data):
+    def decode(self, cat, msg_id, data):
         return json.loads(data)
 
-    def encode(self, msg_id, msg):
+    def encode(self, cat, msg_id, msg):
         return json.dumps(msg)
 
-    def read_pack(self, sock, fun):
-        size = struct.unpack(">H", sock.read(2))
-        data = sock.read(size)
-        msg_id = struct.unpack_from(">H", data)
-        body = data[2:]
-        fun(msg_id, body)
+    def unpack(self, data):
+        pid, = struct.unpack_from(">H", data)
+        cat = pid >> 12
+        msg_id = pid & 0xFFF
+        return cat, msg_id, data[2:]
+
+    def pack(self, cat, msg_id, data):
+        return struct.pack(">HH%ds"%len(data), len(data) + 2, (msg_id | cat << 12), data)

@@ -1,7 +1,10 @@
 # author: garfieldchen
 
+import struct
+
 import gevent
 from gevent.server import StreamServer
+import FlashSandbox
 
 # 0. work flow
 # client 						agent 						server
@@ -20,131 +23,130 @@ from gevent.server import StreamServer
 
 
 class Hub:
-    def __init__(self, port, addr, hooks_in, hooks_out, clazz):
+    def __init__(self, port, addr, hooks_in, hooks_out, clazz, len_size, with_sandbox = True):
         self.agent_class = clazz
         self.addr_out = addr
         self.hooks_in = hooks_in
         self.hooks_out = hooks_out
+        self.with_sandbox = with_sandbox
+
+        self.len_size = len_size
 
         self.agents = []
+        self.listen_port = port
 
         self.server = StreamServer(('0.0.0.0', port), self.on_new_connection)
 
-    def start(self):
-        self.server.start()
+    def serve_forever(self):
+        self.server.serve_forever()
 
     def on_new_connection(self, sock, address):
         try:
-            agent = self.agent_class(sock, address, self.addr_out, self, self.hooks_in, self.hooks_out)
-            self.register(agent)
-        except IOError:
-            sock.close()
+            print "new connection: " + str(sock) + " addr: " + str(address)
+            agent = self.agent_class(sock, address, self.addr_out, self.hooks_in, self.hooks_out)
 
-    def register(self, agent):
-        self.agents.push_back(agent)
+            gevent.spawn(self.net_loop, agent.sock_out, agent, agent.packet_out, "server :::")
+
+            if self.with_sandbox:
+                self.handle_sandbox(sock)
+
+            self.net_loop(agent.sock_in, agent, agent.packet_in, "client :::")
+
+            # gevent.sleep(0)
+        except IOError as e:
+            print "io error: " + str(e)
+            agent.close()
 
 
-class PackSocket:
-    loop = gevent.get_hub().loop
 
-    def __init__(self, sock, head_len, on_pack):
-        self.write_queue = []
+    def net_loop(self, sock, agent, callback, name):
+        while True:
+            try:
+                pack = sock.recv(self.len_size)
+                if len(pack) == 0:
+                    return
 
-        self.read_buff = ""
-        self.pack_len = -1
+                pack_len = 0
+                if self.len_size == 2:
+                    pack_len, = struct.unpack(">H", pack)
+                elif self.len_size == 4:
+                    pack_len, = struct.unpack(">L", pack)
 
-        self.sock = sock
-        self.head_len = head_len
-        self.on_pack = on_pack
+                data = ""
+                if pack_len > 0:
+                    data = sock.recv(pack_len)
+                else:
+                    return
 
-        self.read_watcher = self.loop.io(sock.fileno, 1)
-        self.read_watcher.priority = self.loop.MAXPRI
-        self.read_watcher.start(self.__on_readable)
+                print name + "  data: " + data
+                callback(data)
+                gevent.sleep(0)
+            except IOError:
+                agent.close()
+                raise
 
-        self.write_watcher = self.loop.io(sock.fileno, 2)
-        self.write_watcher.priority = self.loop.MAXPRI
-        self.write_watcher.start(self.__on_writable)
-
-    def write(self, data):
-        self.write_queue.push(data)
-
-    def close(self):
-        self.read_watcher.stop()
-        self.write_watcher.stop()
-
-    def __on_writable(self):
-        pass
-
-    def __on_readable(self):
-        len_l = self.head_len - len(self.read_buff)
-        if len_l > 0:
-            self.read_buff += self.sock.read(self.head_len)
-
-        if self.pack_len > 0:
-            self.read_buff += self.sock.read(self.pack_len - len(self.read_buff) - self.head_len)
-
-        if len(self.read_buff) == self.pack_len - self.head_len:
-            self.on_pack(self.read_buff[self.head_len:])
-            self.read_buff = ""
-            self.pack_len = -1
 
 class Agent:
-    def __init__(self, sock_in, addr_in, addr_out, hooks_in, hooks_out, hub):
+    def __init__(self, sock_in, addr_in, addr_out, hooks_in, hooks_out):
         self.sock_in = sock_in
         self.addr_in = addr_in
 
-        self.hook_in = hooks_in
-        self.hook_out = hooks_out
+        self.addr_out = addr_out
 
-        self.hub = hub
+        self.hooks_in = hooks_in
+        self.hooks_out = hooks_out
 
         self.sock_out = gevent.socket.create_connection(addr_out)
 
-        if not self.sock_out:
-            raise IOError()
+    def packet_in(self, data):
+        cat, msg_id, body = self.unpack(data)
+        self.hook_message(self.sock_out, self.hooks_in, cat, msg_id, body)
 
-    def message_in(self, msg_id, data):
-        self.hook_message(self.socke_out, self.hooks_in, msg_id, data)
+    def packet_out(self, data):
+        cat, msg_id, body = self.unpack(data)
+        self.hook_message(self.sock_in, self.hooks_out, cat, msg_id, body)
 
-    def message_out(self, msg_id, data):
-        self.hook_message(self.socke_in, self.hooks_out, msg_id, data)
+    def hook_message(self, sock, hooks, cat, msg_id, data):
+        handler = None
+        if hooks:
+            handler = hooks.get(msg_id) or hooks.get("default")
 
-    def hook_message(self, sock, hooks, msg_id, data):
-        handler = hooks or hooks[msg_id] or hooks["default"]
         if handler:
-            new_id, body = handler(self, msg_id, self.decode(msg_id, data))
+            new_cat, new_id, body = handler(self, cat, msg_id, self.decode(msg_id, data))
 
-            if new_id:
-                self.send_msg(sock, new_id, body)
+            if new_cat is None:
+                self.forward(sock, new_cat, msg_id, data)
             else:
-                self.forward(sock, msg_id, data)
+                self.send_msg(sock, new_cat, new_id, body)
         else:
-            self.forward(msg_id, data)
+            self.forward(sock, cat, msg_id, data)
 
-    def update(self):
-        try:
-            while True:
-                self.read_pack(self.sock_in, self.message_in)
-                self.read_pack(self.socke_out, self.message_out)
-        except IOError:
-            self.sock_in.close()
-            self.sock_out.close()
+    def close(self):
+        self.sock_in.close()
+        self.sock_out.close()
 
     #
-    def send_msg(self, sock, msg_id, body):
-        pass
+    def send_msg(self, sock, cat, msg_id, body):
+        data = self.encode(cat, msg_id, body)
+        self.forward(self, sock, cat, msg_id, data)
 
     # forward message
-    def forward(self, sock, msg_id, data):
-        pass
+    def forward(self, sock, cat, msg_id, data):
+        b = self.pack(cat, msg_id, data)
+        print "to" + str(sock) + " " + str(sock.send(b))
+        # sock.flush()
 
     # message codec
-    def decode(self, msg_id, data):
+    def decode(self, cat, msg_id, data):
         pass
 
-    def encode(self, msg_id, msg):
+    def encode(self, cat, msg_id, msg):
         pass
 
-    def read_pack(self, sock, fun):
+    def unpack(self, data):
         pass
+
+    def pack(self, cat, msg_id, data):
+        pass
+
 
