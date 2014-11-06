@@ -3,8 +3,21 @@ import ProtocolAgent
 import FlashSandbox
 from JsonAgent import JsonAgent
 
-hooks_in = {
+# retun
+def hook_254(agent, cat, msg_id, body):
+    print "------", agent, cat, msg_id, body
 
+def hook_move(agent, cat, msg_id, body):
+    return cat, msg_id + 1, body
+
+def hook_buy(agent, cat, msg_id, body):
+    body[1] += 1
+    return cat, msg_id, body
+
+hooks_in = {
+    254: hook_254,
+    94: hook_buy,
+    7: hook_move
 }
 
 hooks_out = {

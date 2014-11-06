@@ -13,15 +13,15 @@ def sandbox(port):
     def domain(sock, address):
         print "flash sandbox new connection: " + str(address)
         handle_sandbox(sock)
-        with Timeout(2):
-            sock.close()
-        gevent.sleep(0)
+        # with Timeout(2):
+        sock.close()
+        # gevent.sleep(0)
 
     return StreamServer(('0.0.0.0', port), domain)
 
 
 def handle_sandbox(sock):
-        req = "<policy-file-request/>"
+        req = "<policy-file-request/>\0"
         data = sock.recv(len(req))
         assert (data == req)
         sock.send(domain_content)

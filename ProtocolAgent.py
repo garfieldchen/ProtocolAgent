@@ -112,12 +112,12 @@ class Agent:
             handler = hooks.get(msg_id) or hooks.get("default")
 
         if handler:
-            new_cat, new_id, body = handler(self, cat, msg_id, self.decode(msg_id, data))
+            ret = handler(self, cat, msg_id, self.decode(cat, msg_id, data))
 
-            if new_cat is None:
-                self.forward(sock, new_cat, msg_id, data)
+            if ret:
+                self.send_msg(sock, ret[0], ret[1], ret[2])
             else:
-                self.send_msg(sock, new_cat, new_id, body)
+                self.forward(sock, cat, msg_id, data)
         else:
             self.forward(sock, cat, msg_id, data)
 
