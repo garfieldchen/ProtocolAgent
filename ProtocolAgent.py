@@ -128,7 +128,10 @@ class Agent:
     #
     def send_msg(self, sock, cat, msg_id, body):
         data = self.encode(cat, msg_id, body)
-        self.forward(self, sock, cat, msg_id, data)
+        self.forward(sock, cat, msg_id, data)
+
+    def send_to_server(self, msg_id, body):
+        self.send_msg(self.sock_out, 0, msg_id, body)
 
     # forward message
     def forward(self, sock, cat, msg_id, data):
