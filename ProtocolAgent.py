@@ -40,6 +40,9 @@ class Hub:
     def serve_forever(self):
         self.server.serve_forever()
 
+    def start(self):
+        self.server.start()
+
     def on_new_connection(self, sock, address):
         try:
             print "new connection: " + str(sock) + " addr: " + str(address)
@@ -70,7 +73,7 @@ class Hub:
                 if self.len_size == 2:
                     pack_len, = struct.unpack(">H", pack)
                 elif self.len_size == 4:
-                    pack_len, = struct.unpack(">L", pack)
+                    pack_len, = struct.unpack(">L", pack);
 
                 data = ""
                 if pack_len > 0:
